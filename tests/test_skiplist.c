@@ -230,23 +230,42 @@ static void *reader_thread(void *arg) {
 }
 
 static void test_concurrent_read_write(void) {
-    skiplist_t *sl = sl_new();
-    assert(sl);
-
-    sl_put(sl, S("probe"), S("initial"));
+    /* Reinicializa shared_sl — o teste anterior já o liberou. */
+    shared_sl = sl_new();
+    assert(shared_sl);
+    sl_put(shared_sl, S("probe"), S("initial"));
 
     pthread_t r1, r2, w1;
-    pthread_create(&r1, NULL, reader_thread, sl);
-    pthread_create(&r2, NULL, reader_thread, sl);
-    pthread_create(&w1, NULL, writer_thread, &(int){0});
-    /* writer usa shared_sl — usamos sl local só para leitores */
+    int id = 0;
+    pthread_create(&r1, NULL, reader_thread, shared_sl);
+    pthread_create(&r2, NULL, reader_thread, shared_sl);
+    pthread_create(&w1, NULL, writer_thread, &id);
 
     pthread_join(r1, NULL);
     pthread_join(r2, NULL);
     pthread_join(w1, NULL);
 
-    sl_free(sl);
+    sl_free(shared_sl);
+    shared_sl = NULL;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /* ---- runner ---- */
 

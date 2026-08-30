@@ -3,8 +3,9 @@ project(tinylsm LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-add_library(tinylsm src/version.c src/arena.c src/skiplist.c src/wal.c)
-
+add_library(tinylsm
+    src/version.c src/arena.c src/skiplist.c
+    src/crc32.c src/wal.c src/sst.c)
 target_include_directories(tinylsm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(tinylsm PRIVATE
     -Wall -Wextra -Wpedantic
@@ -40,3 +41,7 @@ add_test(NAME test_skiplist COMMAND test_skiplist)
 add_executable(test_wal tests/test_wal.c)
 target_link_libraries(test_wal PRIVATE tinylsm)
 add_test(NAME test_wal COMMAND test_wal)
+
+add_executable(test_sst tests/test_sst.c)
+target_link_libraries(test_sst PRIVATE tinylsm)
+add_test(NAME test_sst COMMAND test_sst)
