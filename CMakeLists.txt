@@ -5,14 +5,14 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_library(tinylsm
     src/version.c src/arena.c src/skiplist.c
-    src/crc32.c src/wal.c src/sst.c)
+    src/crc32.c src/wal.c src/sst.c src/bloom.c)
 target_include_directories(tinylsm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(tinylsm PRIVATE
     -Wall -Wextra -Wpedantic
     -Wshadow -Wconversion -Wsign-conversion
     -fno-omit-frame-pointer
 )
-target_link_libraries(tinylsm PUBLIC pthread)   # <-- adicionado para o arena
+target_link_libraries(tinylsm PUBLIC pthread m)   # <-- adicionado para o arena
 
 
 enable_testing()
@@ -45,3 +45,7 @@ add_test(NAME test_wal COMMAND test_wal)
 add_executable(test_sst tests/test_sst.c)
 target_link_libraries(test_sst PRIVATE tinylsm)
 add_test(NAME test_sst COMMAND test_sst)
+
+add_executable(test_bloom tests/test_bloom.c)
+target_link_libraries(test_bloom PRIVATE tinylsm)
+add_test(NAME test_bloom COMMAND test_bloom)
