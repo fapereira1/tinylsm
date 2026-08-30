@@ -62,3 +62,7 @@ add_test(NAME test_compaction COMMAND test_compaction)
 add_executable(test_index tests/test_index.c)
 target_link_libraries(test_index PRIVATE tinylsm)
 add_test(NAME test_index COMMAND test_index)
+
+add_executable(test_mvcc tests/test_mvcc.c)
+target_link_libraries(test_mvcc PRIVATE tinylsm)
+add_test(NAME test_mvcc COMMAND test_mvcc)

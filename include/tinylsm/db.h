@@ -19,10 +19,10 @@
  *   db_open() varre o diretório por *.sst existentes e replaya o WAL.
  */
 
-#define DB_DEFAULT_MEM_LIMIT (4u * 1024u * 1024u)  /* 4 MB */
+#define DB_DEFAULT_MEM_LIMIT (4u * 1024u * 1024u) /* 4 MB */
 
 typedef struct {
-    size_t mem_limit_bytes; /* flush quando MemTable exceder este valor */
+  size_t mem_limit_bytes; /* flush quando MemTable exceder este valor */
 } db_opts_t;
 
 #define COMPACTION_THRESHOLD 4u
@@ -31,10 +31,10 @@ typedef struct db db_t;
 
 /* Abre ou cria um banco de dados no diretório `dir`.
  * Retorna NULL em falha. */
-db_t        *db_open(const char *dir, db_opts_t opts);
+db_t *db_open(const char *dir, db_opts_t opts);
 
 /* Faz flush final do MemTable e fecha todos os recursos. */
-void         db_close(db_t *db);
+void db_close(db_t *db);
 
 /* Escreve key=value. Durável após o retorno (fsync). */
 lsm_status_t db_put(db_t *db, slice_t key, slice_t value);
@@ -65,3 +65,25 @@ lsm_status_t db_del(db_t *db, slice_t key);
  * Retorna LSM_OK se num_ssts < 2 (nada a fazer).
  */
 lsm_status_t db_compact(db_t *db);
+
+/*
+ * db_snapshot_t — visão consistente do banco em um ponto no tempo.
+ *
+ * Uso:
+ *   db_snapshot_t *snap = db_snapshot_open(db);
+ *   db_snapshot_get(snap, key, &out, &out_len);
+ *   db_snapshot_release(snap);
+ *
+ * Garantia: db_snapshot_get só vê escritas confirmadas ANTES de
+ * db_snapshot_open retornar — independente de flushes ou compactions.
+ */
+typedef struct {
+  db_t *db;
+  uint64_t seq; /* seq capturado no momento do open */
+} db_snapshot_t;
+
+db_snapshot_t *db_snapshot_open(db_t *db);
+void db_snapshot_release(db_snapshot_t *snap);
+
+lsm_status_t db_snapshot_get(db_snapshot_t *snap, slice_t key, uint8_t **out,
+                             size_t *out_len);

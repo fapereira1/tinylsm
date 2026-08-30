@@ -23,6 +23,9 @@ struct db {
   bloom_t blooms[MAX_SSTS];
   size_t num_ssts;
   uint64_t sst_counter; /* último número de SST gerado */
+  uint64_t global_seq;
+  size_t num_snapshots; /* <-- novo */
+
   pthread_rwlock_t rwlock;
   int compacting;
 };
@@ -168,10 +171,13 @@ static lsm_status_t db_flush_locked(db_t *db) {
   db->num_ssts++;
 
   /* Novo MemTable limpo */
+  db->global_seq = sl_current_seq(db->memtable); /* preserva continuidade */
   sl_free(db->memtable);
   db->memtable = sl_new();
   if (!db->memtable)
     return LSM_OOM;
+  sl_set_initial_seq(db->memtable,
+                     db->global_seq); /* novo MemTable continua do mesmo seq */
 
   /* Trunca WAL — dados agora estão no SSTable */
   wal_close(db->wal);
@@ -284,6 +290,8 @@ db_t *db_open(const char *dir, db_opts_t opts) {
   free(wp);
   if (!db->wal)
     goto fail;
+
+  db->global_seq = sl_current_seq(db->memtable);
 
   return db;
 
@@ -477,6 +485,11 @@ lsm_status_t db_compact(db_t *db) {
     pthread_rwlock_unlock(&db->rwlock);
     return LSM_BUSY;
   }
+  if (db->num_snapshots > 0) { /* <-- ANTES do num_ssts check */
+    pthread_rwlock_unlock(&db->rwlock);
+    return LSM_BUSY;
+  }
+
   if (db->num_ssts < 2) {
     pthread_rwlock_unlock(&db->rwlock);
     return LSM_OK;
@@ -678,4 +691,103 @@ fail_early:
   db->compacting = 0;
   pthread_rwlock_unlock(&db->rwlock);
   return s == LSM_OK ? LSM_OOM : s;
+}
+
+/* --------------------------------------------------------------------------
+ * Snapshot API
+ * -------------------------------------------------------------------------- */
+
+db_snapshot_t *db_snapshot_open(db_t *db) {
+  db_snapshot_t *snap = malloc(sizeof(*snap));
+  if (!snap)
+    return NULL;
+
+  /* wrlock — modifica num_snapshots e lê seq atomicamente */
+  pthread_rwlock_wrlock(&db->rwlock);
+  snap->db = db;
+  snap->seq = sl_current_seq(db->memtable);
+  db->num_snapshots++; /* <-- estava faltando */
+  pthread_rwlock_unlock(&db->rwlock);
+
+  return snap;
+}
+
+void db_snapshot_release(db_snapshot_t *snap) {
+  pthread_rwlock_wrlock(&snap->db->rwlock);
+  snap->db->num_snapshots--; /* <-- estava faltando */
+  pthread_rwlock_unlock(&snap->db->rwlock);
+  free(snap);
+}
+
+lsm_status_t db_snapshot_get(db_snapshot_t *snap, slice_t key, uint8_t **out,
+                             size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+
+  pthread_rwlock_rdlock(&snap->db->rwlock);
+
+  /* 1. MemTable — só entradas com seq ≤ snapshot_seq */
+  slice_t v;
+  sl_op_t op;
+  lsm_status_t s = sl_get_at_seq(snap->db->memtable, key, snap->seq, &v, &op);
+  if (s == LSM_OK) {
+    if (op == OP_PUT) {
+      if (v.len > 0) {
+        *out = malloc(v.len);
+        if (!*out) {
+          pthread_rwlock_unlock(&snap->db->rwlock);
+          return LSM_OOM;
+        }
+        memcpy(*out, v.data, v.len);
+      }
+      *out_len = v.len;
+      pthread_rwlock_unlock(&snap->db->rwlock);
+      return LSM_OK;
+    }
+    /* Tombstone visível no snapshot — chave foi deletada antes do snap */
+    pthread_rwlock_unlock(&snap->db->rwlock);
+    return LSM_NOT_FOUND;
+  }
+
+  /* 2. SSTables do mais novo para o mais antigo, filtrando por seq */
+  for (int i = (int)snap->db->num_ssts - 1; i >= 0; i--) {
+    if (!bloom_may_contain(&snap->db->blooms[i], key))
+      continue;
+
+    sst_reader_t *r = sst_reader_open(snap->db->sst_paths[i]);
+    if (!r)
+      continue;
+
+    sl_op_t sst_op;
+    uint64_t seq;
+    s = sst_reader_get(r, key, &sst_op, &seq, out, out_len);
+    sst_reader_close(r);
+
+    if (s == LSM_OK) {
+      if (seq > snap->seq) {
+        /*
+         * Esta versão foi escrita APÓS o snapshot.
+         * Descarta e tenta o SSTable mais antigo — pode ter
+         * uma versão anterior da mesma chave.
+         */
+        free(*out);
+        *out = NULL;
+        *out_len = 0;
+        continue;
+      }
+      if (sst_op == OP_DEL) {
+        *out_len = 0;
+        s = LSM_NOT_FOUND;
+      }
+      pthread_rwlock_unlock(&snap->db->rwlock);
+      return s;
+    }
+    if (s != LSM_NOT_FOUND) {
+      pthread_rwlock_unlock(&snap->db->rwlock);
+      return s;
+    }
+  }
+
+  pthread_rwlock_unlock(&snap->db->rwlock);
+  return LSM_NOT_FOUND;
 }
