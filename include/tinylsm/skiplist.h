@@ -107,3 +107,11 @@ slice_t  sl_iter_value(const sl_iter_t *it);
 sl_op_t  sl_iter_op(const sl_iter_t *it);
 uint64_t sl_iter_seq(const sl_iter_t *it);
 void     sl_iter_finish(sl_iter_t *it);
+
+/*
+ * Como sl_get, mas também expõe o op (PUT ou DEL).
+ * Retorna LSM_OK se a chave existe no MemTable (mesmo como tombstone).
+ * Necessário para o DB distinguir "ausente" de "deletado".
+ */
+lsm_status_t sl_get_raw(skiplist_t *sl, slice_t key,
+                         slice_t *out_value, sl_op_t *out_op);

@@ -95,6 +95,7 @@ void bloom_destroy(bloom_t *b) {
 }
 
 void bloom_add(bloom_t *b, slice_t key) {
+    if (!b->bits || b->num_bits == 0) return;
     uint32_t h1, h2;
     bloom_hashes(key, &h1, &h2);
     for (uint32_t i = 0; i < b->num_hashes; i++) {
@@ -104,6 +105,7 @@ void bloom_add(bloom_t *b, slice_t key) {
 }
 
 int bloom_may_contain(const bloom_t *b, slice_t key) {
+    if (!b->bits || b->num_bits == 0) return 1;
     uint32_t h1, h2;
     bloom_hashes(key, &h1, &h2);
     for (uint32_t i = 0; i < b->num_hashes; i++) {

@@ -266,4 +266,24 @@ uint64_t sl_iter_seq(const sl_iter_t *it)   { return it->cur->seq;   }
 void sl_iter_finish(sl_iter_t *it) {
     pthread_rwlock_unlock(&it->sl->rwlock);
     it->cur = NULL;
-} 
+}
+
+lsm_status_t sl_get_raw(skiplist_t *sl, slice_t key,
+                          slice_t *out_value, sl_op_t *out_op) {
+    if (slice_is_empty(key)) return LSM_INVALID_ARG;
+
+    pthread_rwlock_rdlock(&sl->rwlock);
+
+    sl_node_t *prev = sl_find_prev(sl, key, UINT64_MAX, NULL);
+    sl_node_t *n    = sl_node_fwd(prev)[0];
+
+    lsm_status_t s = LSM_NOT_FOUND;
+    if (n && slice_eq(n->key, key)) {
+        *out_value = n->value;
+        *out_op    = n->op;
+        s          = LSM_OK;
+    }
+
+    pthread_rwlock_unlock(&sl->rwlock);
+    return s;
+}

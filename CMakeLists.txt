@@ -5,7 +5,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_library(tinylsm
     src/version.c src/arena.c src/skiplist.c
-    src/crc32.c src/wal.c src/sst.c src/bloom.c)
+    src/crc32.c src/wal.c src/sst.c src/bloom.c src/db.c)
+
 target_include_directories(tinylsm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(tinylsm PRIVATE
     -Wall -Wextra -Wpedantic
@@ -49,3 +50,7 @@ add_test(NAME test_sst COMMAND test_sst)
 add_executable(test_bloom tests/test_bloom.c)
 target_link_libraries(test_bloom PRIVATE tinylsm)
 add_test(NAME test_bloom COMMAND test_bloom)
+
+add_executable(test_db tests/test_db.c)
+target_link_libraries(test_db PRIVATE tinylsm)
+add_test(NAME test_db COMMAND test_db)
