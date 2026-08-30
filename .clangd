@@ -1,0 +1,12 @@
+CompileFlags:
+  Add:
+    - "-I/home/pereira/Development/Github/fapereira1/tinylsm/include"
+    - "-I/home/pereira/Development/Github/fapereira1/tinylsm/src"
+  Remove:
+    - "-std=gnu11"
+  Add:
+    - "-std=c11"
+
+Diagnostics:
+  Suppress:
+    - unknown_typename   # tipos opacos em arquivos .c privados
