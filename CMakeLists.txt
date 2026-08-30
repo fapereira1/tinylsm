@@ -15,7 +15,6 @@ target_compile_options(tinylsm PRIVATE
 )
 target_link_libraries(tinylsm PUBLIC pthread m)   # <-- adicionado para o arena
 
-
 enable_testing()
 
 add_executable(tinylsm_cli src/main.c)
@@ -54,3 +53,7 @@ add_test(NAME test_bloom COMMAND test_bloom)
 add_executable(test_db tests/test_db.c)
 target_link_libraries(test_db PRIVATE tinylsm)
 add_test(NAME test_db COMMAND test_db)
+
+add_executable(test_compaction tests/test_compaction.c)
+target_link_libraries(test_compaction PRIVATE tinylsm)
+add_test(NAME test_compaction COMMAND test_compaction)

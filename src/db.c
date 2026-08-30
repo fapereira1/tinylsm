@@ -24,6 +24,7 @@ struct db {
     size_t           num_ssts;
     uint64_t         sst_counter;  /* último número de SST gerado */
     pthread_rwlock_t rwlock;
+    int compacting;
 };
 
 /* --------------------------------------------------------------------------
@@ -342,4 +343,245 @@ lsm_status_t db_get(db_t *db, slice_t key, uint8_t **out, size_t *out_len) {
 
     pthread_rwlock_unlock(&db->rwlock);
     return LSM_NOT_FOUND;
+}
+
+/* --------------------------------------------------------------------------
+ * Compaction — k-way merge de todos os SSTables
+ * -------------------------------------------------------------------------- */
+
+typedef struct {
+    sst_reader_t *reader;
+    sst_iter_t    iter;
+    int           valid;
+} merge_src_t;
+
+static void merge_srcs_close(merge_src_t *srcs, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (!srcs[i].reader) continue;
+        sst_iter_finish(&srcs[i].iter);
+        sst_reader_close(srcs[i].reader);
+        srcs[i].reader = NULL;
+    }
+    free(srcs);
+}
+
+static int any_valid(merge_src_t *srcs, size_t n) {
+    for (size_t i = 0; i < n; i++)
+        if (srcs[i].valid) return 1;
+    return 0;
+}
+
+/* Retorna a menor chave corrente entre todos os iteradores válidos. */
+static slice_t find_min_key(merge_src_t *srcs, size_t n) {
+    slice_t min = slice_empty();
+    int found   = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (!srcs[i].valid) continue;
+        slice_t k = sst_iter_key(&srcs[i].iter);
+        if (!found || slice_cmp(k, min) < 0) { min = k; found = 1; }
+    }
+    return min;
+}
+
+/* Deriva o path do .bloom a partir do path do .sst */
+static char *sst_to_bloom_path(const char *sst_path) {
+    size_t len = strlen(sst_path);
+    char *bp = malloc(len + 3);   /* .sst → .bloom: 3 bytes extras */
+    if (!bp) return NULL;
+    memcpy(bp, sst_path, len + 1);
+    char *ext = strrchr(bp, '.');
+    if (ext) memcpy(ext, ".bloom", 7);
+    return bp;
+}
+
+lsm_status_t db_compact(db_t *db) {
+    /* ----------------------------------------------------------------
+     * Fase 1: snapshot do estado atual (write lock brevemente)
+     * ---------------------------------------------------------------- */
+    pthread_rwlock_wrlock(&db->rwlock);
+
+    if (db->compacting) {
+        pthread_rwlock_unlock(&db->rwlock);
+        return LSM_BUSY;
+    }
+    if (db->num_ssts < 2) {
+        pthread_rwlock_unlock(&db->rwlock);
+        return LSM_OK;
+    }
+
+    size_t   n       = db->num_ssts;
+    uint64_t new_n   = ++db->sst_counter;
+    db->compacting   = 1;
+
+    /* Copia os paths dos SSTables a compactar */
+    char **paths_snap = malloc(n * sizeof(char *));
+    if (!paths_snap) {
+        db->compacting = 0;
+        pthread_rwlock_unlock(&db->rwlock);
+        return LSM_OOM;
+    }
+    memcpy(paths_snap, db->sst_paths, n * sizeof(char *));
+
+    pthread_rwlock_unlock(&db->rwlock);
+    /* Lock liberado — reads e writes continuam normalmente no MemTable */
+
+    /* ----------------------------------------------------------------
+     * Fase 2: abre iteradores e faz o merge (sem lock)
+     * ---------------------------------------------------------------- */
+    merge_src_t *srcs = calloc(n, sizeof(*srcs));
+    if (!srcs) { free(paths_snap); goto fail_early; }
+
+    lsm_status_t s = LSM_OK;
+    for (size_t i = 0; i < n; i++) {
+        srcs[i].reader = sst_reader_open(paths_snap[i]);
+        if (!srcs[i].reader) { s = LSM_IO_ERROR; goto fail_merge; }
+        sst_iter_init(&srcs[i].iter, srcs[i].reader);
+        srcs[i].valid = sst_iter_valid(&srcs[i].iter);
+    }
+
+    /* Prepara SSTable e Bloom de saída */
+    char fname[32];
+    fmt_sst(fname, sizeof(fname), new_n);
+    char *new_sst_path = mk_path(db->dir, fname);
+    fmt_bloom(fname, sizeof(fname), new_n);
+    char *new_bloom_path = mk_path(db->dir, fname);
+    if (!new_sst_path || !new_bloom_path) { s = LSM_OOM; goto fail_paths; }
+
+    bloom_t new_bloom;
+    if (bloom_init(&new_bloom, n * 1000, 0.01) != LSM_OK) {
+        s = LSM_OOM; goto fail_paths;
+    }
+
+    sst_writer_t *w = sst_writer_open(new_sst_path);
+    if (!w) { bloom_destroy(&new_bloom); s = LSM_IO_ERROR; goto fail_paths; }
+
+    /* K-way merge */
+    while (s == LSM_OK && any_valid(srcs, n)) {
+        slice_t min_key = find_min_key(srcs, n);
+
+        /*
+         * Copia min_key para buffer local ANTES de avançar qualquer iterador.
+         * Os dados dos iteradores vivem em blk_data que é liberado ao avançar
+         * para um novo bloco.
+         */
+        uint8_t *mk_buf = malloc(min_key.len > 0 ? min_key.len : 1);
+        if (!mk_buf) { s = LSM_OOM; break; }
+        memcpy(mk_buf, min_key.data, min_key.len);
+        slice_t mk = slice_make(mk_buf, min_key.len);
+
+        /*
+         * Vencedor: o SSTable de índice mais alto (mais novo) que contém mk.
+         * Iteramos de trás para frente — o primeiro match é o vencedor.
+         */
+        int winner = -1;
+        for (int i = (int)n - 1; i >= 0; i--) {
+            if (srcs[i].valid && slice_eq(sst_iter_key(&srcs[i].iter), mk)) {
+                winner = i;
+                break;
+            }
+        }
+
+        /*
+         * Grava vencedor no SSTable de saída ANTES de avançar qualquer
+         * iterador — os dados ainda são válidos neste momento.
+         * Tombstones (OP_DEL) são descartados: compaction total não precisa
+         * preservá-los (não há SSTables mais antigos após o merge).
+         */
+        if (winner >= 0 && sst_iter_op(&srcs[winner].iter) == OP_PUT) {
+            s = sst_writer_add(w,
+                    OP_PUT,
+                    sst_iter_seq(&srcs[winner].iter),
+                    sst_iter_key(&srcs[winner].iter),
+                    sst_iter_value(&srcs[winner].iter));
+            if (s == LSM_OK)
+                bloom_add(&new_bloom, sst_iter_key(&srcs[winner].iter));
+        }
+
+        /* Avança TODOS os iteradores que apontam para mk */
+        for (size_t i = 0; i < n; i++) {
+            if (!srcs[i].valid) continue;
+            if (slice_eq(sst_iter_key(&srcs[i].iter), mk)) {
+                sst_iter_next(&srcs[i].iter);
+                srcs[i].valid = sst_iter_valid(&srcs[i].iter);
+            }
+        }
+
+        free(mk_buf);
+    }
+
+    merge_srcs_close(srcs, n);
+    srcs = NULL;
+
+    if (s == LSM_OK) s = sst_writer_finish(w);
+    sst_writer_free(w);
+
+    if (s == LSM_OK) s = bloom_save_file(&new_bloom, new_bloom_path);
+    free(new_bloom_path);
+
+    if (s != LSM_OK) {
+        bloom_destroy(&new_bloom);
+        unlink(new_sst_path);
+        free(new_sst_path);
+        free(paths_snap);
+        pthread_rwlock_wrlock(&db->rwlock);
+        db->compacting = 0;
+        pthread_rwlock_unlock(&db->rwlock);
+        return s;
+    }
+
+    /* ----------------------------------------------------------------
+     * Fase 3: swap atômico da lista de SSTables (write lock brevemente)
+     * ---------------------------------------------------------------- */
+    pthread_rwlock_wrlock(&db->rwlock);
+
+    /*
+     * SSTables [0..n-1]: os que compactamos (a substituir)
+     * SSTables [n..num_ssts-1]: adicionados por flushes durante compaction
+     *
+     * Resultado: [compacted] + [flushes durante compaction]
+     */
+    size_t remaining = db->num_ssts - n;
+
+    /* Salva blooms antigos para destruição (após liberar o lock) */
+    bloom_t *old_blooms = malloc(n * sizeof(bloom_t));
+    if (old_blooms)
+        memcpy(old_blooms, db->blooms, n * sizeof(bloom_t));
+
+    if (remaining > 0) {
+        memmove(&db->sst_paths[1], &db->sst_paths[n],
+                remaining * sizeof(char *));
+        memmove(&db->blooms[1], &db->blooms[n],
+                remaining * sizeof(bloom_t));
+    }
+
+    db->sst_paths[0] = new_sst_path;
+    db->blooms[0]    = new_bloom;
+    db->num_ssts     = 1 + remaining;
+    db->compacting   = 0;
+
+    pthread_rwlock_unlock(&db->rwlock);
+
+    /* Fase 4: limpeza dos arquivos antigos (fora do lock) */
+    for (size_t i = 0; i < n; i++) {
+     if (old_blooms) bloom_destroy(&old_blooms[i]);
+     char *bp = sst_to_bloom_path(paths_snap[i]);
+     if (bp) { unlink(bp); free(bp); }
+     unlink(paths_snap[i]);
+     free(paths_snap[i]);   /* <-- estava faltando */
+    }
+    free (old_blooms);
+    free(paths_snap);
+    return LSM_OK;
+
+fail_paths:
+    free(new_sst_path);
+    free(new_bloom_path);
+fail_merge:
+    if (srcs) merge_srcs_close(srcs, n);
+fail_early:
+    free(paths_snap);
+    pthread_rwlock_wrlock(&db->rwlock);
+    db->compacting = 0;
+    pthread_rwlock_unlock(&db->rwlock);
+    return s == LSM_OK ? LSM_OOM : s;
 }

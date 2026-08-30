@@ -25,6 +25,8 @@ typedef struct {
     size_t mem_limit_bytes; /* flush quando MemTable exceder este valor */
 } db_opts_t;
 
+#define COMPACTION_THRESHOLD 4u
+
 typedef struct db db_t;
 
 /* Abre ou cria um banco de dados no diretório `dir`.
@@ -46,3 +48,20 @@ lsm_status_t db_get(db_t *db, slice_t key, uint8_t **out, size_t *out_len);
 
 /* Deleta key (insere tombstone). Durável após o retorno. */
 lsm_status_t db_del(db_t *db, slice_t key);
+
+/*
+ * Compacta todos os SSTables em um único.
+ *
+ * O que faz:
+ *   - K-way merge de todos os SSTables (do mais antigo ao mais novo)
+ *   - Mantém apenas a versão mais recente de cada chave
+ *   - Elimina tombstones (chave deletada some definitivamente do disco)
+ *   - Gera novo SSTable + Bloom, apaga os antigos
+ *
+ * Thread safety: pode ser chamado concorrentemente com Put/Get/Del.
+ * Writes continuam no MemTable durante o merge. O swap final é atômico.
+ *
+ * Retorna LSM_BUSY se uma compaction já está em andamento.
+ * Retorna LSM_OK se num_ssts < 2 (nada a fazer).
+ */
+lsm_status_t db_compact(db_t *db);
