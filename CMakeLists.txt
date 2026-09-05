@@ -18,7 +18,7 @@ target_link_libraries(tinylsm PUBLIC pthread m)   # <-- adicionado para o arena
 
 enable_testing()
 
-add_executable(tinylsm_cli src/main.c)
+add_executable(tinylsm_cli src/cli.c)
 target_link_libraries(tinylsm_cli PRIVATE tinylsm)
 
 add_executable(test_version tests/test_version.c)

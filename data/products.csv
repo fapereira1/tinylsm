@@ -1,0 +1,11 @@
+id,name,category,price
+P001,Teclado Mecânico,peripherals,299.90
+P002,Monitor 27pol,monitors,1899.00
+P003,Mouse Gamer,peripherals,189.90
+P004,Headset USB,audio,249.90
+P005,Webcam HD,video,399.00
+P006,SSD 1TB,storage,459.90
+P007,Gabinete ATX,cases,299.00
+P008,Fonte 650W,power,389.90
+P009,Placa de Vídeo,gpu,2899.00
+P010,Memória 16GB,memory,289.90
