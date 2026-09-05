@@ -25,43 +25,101 @@
       "cacheVariables": {
         "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer"
       }
+    },
+  {
+    "name": "fuzzer",
+    "inherits": "debug",
+    "binaryDir": "${sourceDir}/build/fuzzer",
+    "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "FUZZER": "ON"
     }
+   }
   ],
   "buildPresets": [
-    {
-      "name": "debug",
-      "configurePreset": "debug"
-    },
-    {
-      "name": "asan",
-      "configurePreset": "asan"
-    },
-    {
-      "name": "tsan",
-      "configurePreset": "tsan"
-    }
+    { "name": "debug",  "configurePreset": "debug"  },
+    { "name": "asan",   "configurePreset": "asan"   },
+    { "name": "tsan",   "configurePreset": "tsan"   },
+    { "name": "fuzzer", "configurePreset": "fuzzer" }
   ],
   "testPresets": [
     {
       "name": "debug",
       "configurePreset": "debug",
-      "output": {
-        "outputOnFailure": true
-      }
+      "output": { "outputOnFailure": true }
     },
     {
       "name": "asan",
       "configurePreset": "asan",
-      "output": {
-        "outputOnFailure": true
-      }
+      "output": { "outputOnFailure": true }
     },
     {
       "name": "tsan",
       "configurePreset": "tsan",
-      "output": {
-        "outputOnFailure": true
-      }
+      "output": { "outputOnFailure": true }
     }
   ]
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

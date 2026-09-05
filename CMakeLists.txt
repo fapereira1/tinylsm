@@ -66,3 +66,32 @@ add_test(NAME test_index COMMAND test_index)
 add_executable(test_mvcc tests/test_mvcc.c)
 target_link_libraries(test_mvcc PRIVATE tinylsm)
 add_test(NAME test_mvcc COMMAND test_mvcc)
+
+# --- Crash recovery (fork + _exit simula crash sem db_close) ---
+add_executable(test_crash_recovery tests/test_crash_recovery.c)
+target_link_libraries(test_crash_recovery PRIVATE tinylsm)
+add_test(NAME test_crash_recovery COMMAND test_crash_recovery)
+
+# _exit() no filho bypassa os atexit handlers do ASan — sem leaks reais,
+# mas o ASan reportaria como falso positivo. Suprime só detect_leaks.
+set_tests_properties(test_crash_recovery PROPERTIES
+    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+
+# --- Fuzzer (requer -DFUZZER=ON via preset fuzzer) ---
+option(FUZZER "Build fuzz targets" OFF)
+if(FUZZER)
+    # Versão instrumented da lib para o fuzzer
+    add_library(tinylsm_fuzz STATIC
+        src/version.c src/arena.c src/skiplist.c
+        src/crc32.c src/wal.c src/sst.c src/bloom.c
+        src/db.c src/index.c)
+    target_include_directories(tinylsm_fuzz PUBLIC include src)
+    target_compile_options(tinylsm_fuzz PRIVATE
+        ${WARN_FLAGS} -fsanitize=fuzzer-no-link,address -g)
+    target_link_libraries(tinylsm_fuzz PUBLIC pthread m)
+
+    add_executable(fuzz_db fuzz/fuzz_db.c)
+    target_link_libraries(fuzz_db PRIVATE tinylsm_fuzz)
+    target_compile_options(fuzz_db PRIVATE -fsanitize=fuzzer,address -g)
+    target_link_options(fuzz_db PRIVATE -fsanitize=fuzzer,address)
+endif()
